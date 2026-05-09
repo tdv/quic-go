@@ -374,6 +374,13 @@ var newConnection = func(
 	return &wrappedConn{Conn: s}
 }
 
+func clientActiveConnIDLimit(conf *Config) uint64 {
+	if conf != nil && conf.ActiveConnectionIDLimit > 0 {
+		return conf.ActiveConnectionIDLimit
+	}
+	return protocol.MaxActiveConnectionIDs
+}
+
 // declare this as a variable, such that we can it mock it in the tests
 var newClientConnection = func(
 	ctx context.Context,
@@ -469,7 +476,8 @@ var newClientConnection = func(
 		// If set to the default value, it will be omitted from the transport parameters, which will make
 		// old quic-go versions interpret it as 0, instead of the default value of 2.
 		// See https://github.com/quic-go/quic-go/pull/3806.
-		ActiveConnectionIDLimit:   protocol.MaxActiveConnectionIDs,
+		ActiveConnectionIDLimit:   clientActiveConnIDLimit(conf),
+		DisableActiveMigration:    conf.DisableActiveMigration,
 		InitialSourceConnectionID: srcConnID,
 		EnableResetStreamAt:       conf.EnableStreamResetPartialDelivery,
 	}

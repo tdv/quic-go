@@ -29,6 +29,9 @@ func DialAddr(ctx context.Context, addr string, tlsConf *tls.Config, conf *Confi
 	if err != nil {
 		return nil, err
 	}
+	if conf != nil && conf.ConnectionIDGenerator != nil {
+		tr.ConnectionIDGenerator = conf.ConnectionIDGenerator
+	}
 	conn, err := tr.dial(ctx, udpAddr, addr, tlsConf, conf, false)
 	if err != nil {
 		tr.Close()
@@ -51,6 +54,9 @@ func DialAddrEarly(ctx context.Context, addr string, tlsConf *tls.Config, conf *
 	tr, err := setupTransport(udpConn, tlsConf, true)
 	if err != nil {
 		return nil, err
+	}
+	if conf != nil && conf.ConnectionIDGenerator != nil {
+		tr.ConnectionIDGenerator = conf.ConnectionIDGenerator
 	}
 	conn, err := tr.dial(ctx, udpAddr, addr, tlsConf, conf, true)
 	if err != nil {
