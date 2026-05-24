@@ -11,6 +11,7 @@ import (
 	"github.com/quic-go/quic-go/internal/handshake"
 	"github.com/quic-go/quic-go/internal/protocol"
 	"github.com/quic-go/quic-go/qlogwriter"
+	utls "github.com/refraction-networking/utls"
 )
 
 // The StreamID is the ID of a QUIC stream.
@@ -191,6 +192,11 @@ type Config struct {
 	// DisableActiveMigration sets the disable_active_migration transport parameter.
 	// Chrome always advertises this parameter. Default is false.
 	DisableActiveMigration bool
+
+	// ClientHelloID selects the uTLS ClientHello fingerprint for the QUIC TLS handshake.
+	// If nil, the standard crypto/tls fingerprint is used.
+	// Set to &utls.HelloChrome_Auto to mimic Chrome.
+	ClientHelloID *utls.ClientHelloID
 }
 
 // ClientInfo contains information about an incoming connection attempt.

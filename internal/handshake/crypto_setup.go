@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	utls "github.com/refraction-networking/utls"
+
 	"github.com/quic-go/quic-go/internal/protocol"
 	"github.com/quic-go/quic-go/internal/qerr"
 	"github.com/quic-go/quic-go/internal/utils"
@@ -27,7 +29,7 @@ const clientSessionStateRevision = 5
 
 type cryptoSetup struct {
 	tlsConf *tls.Config
-	conn    *tls.QUICConn
+	conn    quicTLSConn
 
 	events []Event
 
@@ -66,7 +68,8 @@ type cryptoSetup struct {
 
 var _ CryptoSetup = &cryptoSetup{}
 
-// NewCryptoSetupClient creates a new crypto setup for the client
+// NewCryptoSetupClient creates a new crypto setup for the client.
+// If helloID is non-nil, the QUIC TLS handshake uses uTLS with that fingerprint.
 func NewCryptoSetupClient(
 	connID protocol.ConnectionID,
 	tp *wire.TransportParameters,
@@ -76,6 +79,7 @@ func NewCryptoSetupClient(
 	qlogger qlogwriter.Recorder,
 	logger utils.Logger,
 	version protocol.Version,
+	helloID *utls.ClientHelloID,
 ) CryptoSetup {
 	cs := newCryptoSetup(
 		connID,
@@ -92,10 +96,14 @@ func NewCryptoSetupClient(
 	cs.tlsConf = tlsConf
 	cs.allow0RTT = enable0RTT
 
-	cs.conn = tls.QUICClient(&tls.QUICConfig{
-		TLSConfig:           tlsConf,
-		EnableSessionEvents: true,
-	})
+	if helloID != nil {
+		cs.conn = newUTLSConn(tlsConf, *helloID)
+	} else {
+		cs.conn = tls.QUICClient(&tls.QUICConfig{
+			TLSConfig:           tlsConf,
+			EnableSessionEvents: true,
+		})
+	}
 	cs.conn.SetTransportParameters(cs.ourParams.Marshal(protocol.PerspectiveClient))
 
 	return cs
