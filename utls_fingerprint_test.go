@@ -16,7 +16,7 @@ import (
 
 const extCompressCertificate = 27
 
-func observedClientHello(t *testing.T, conf *Config) *tls.ClientHelloInfo {
+func observedClientHello(t *testing.T, serverName string, conf *Config) *tls.ClientHelloInfo {
 	t.Helper()
 	hellos := make(chan *tls.ClientHelloInfo, 1)
 	serverTLS := testdata.GetTLSConfig()
@@ -51,7 +51,10 @@ func observedClientHello(t *testing.T, conf *Config) *tls.ClientHelloInfo {
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	clientTLS := &tls.Config{RootCAs: testdata.GetRootCA(), ServerName: "localhost", NextProtos: []string{"utls-test"}}
+	clientTLS := &tls.Config{RootCAs: testdata.GetRootCA(), ServerName: serverName, NextProtos: []string{"utls-test"}}
+	if serverName == "" {
+		clientTLS = &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"utls-test"}}
+	}
 	conn, err := tr.Dial(ctx, ln.Addr(), clientTLS, conf)
 	require.NoError(t, err)
 	conn.CloseWithError(0, "")
@@ -67,11 +70,15 @@ func observedClientHello(t *testing.T, conf *Config) *tls.ClientHelloInfo {
 
 func TestTransportDialAppliesUTLSClientHello(t *testing.T) {
 	chrome := utls.HelloChrome_Auto
-	h := observedClientHello(t, &Config{ClientHelloID: &chrome})
+	h := observedClientHello(t, "localhost", &Config{ClientHelloID: &chrome})
 	require.True(t, slices.Contains(h.Extensions, extCompressCertificate),
 		"ClientHelloID was not applied: no Chrome compress_certificate extension in %v", h.Extensions)
 
-	plain := observedClientHello(t, nil)
+	byIP := observedClientHello(t, "", &Config{ClientHelloID: &chrome})
+	require.True(t, slices.Contains(byIP.Extensions, extCompressCertificate),
+		"dialing an IP (no SNI, GREASE ECH only) must still complete with the uTLS hello")
+
+	plain := observedClientHello(t, "localhost", nil)
 	require.False(t, slices.Contains(plain.Extensions, extCompressCertificate),
 		"without ClientHelloID the standard crypto/tls hello must be used")
 }

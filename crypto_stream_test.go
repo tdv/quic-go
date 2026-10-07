@@ -286,3 +286,33 @@ func testInitialCryptoStreamClientRandomizedSizes(t *testing.T, clientHello []by
 		require.Contains(t, string(reassembled), expectedServerName)
 	}
 }
+
+func clientHelloWithOnlyECH() []byte {
+	body := []byte{0x03, 0x03}
+	body = append(body, make([]byte, 32)...)
+	body = append(body, 0)
+	body = append(body, 0, 2, 0x13, 0x01)
+	body = append(body, 1, 0)
+	ext := []byte{0xfe, 0x0d, 0, 4, 1, 2, 3, 4}
+	body = append(body, byte(len(ext)>>8), byte(len(ext)))
+	body = append(body, ext...)
+	return append([]byte{1, 0, byte(len(body) >> 8), byte(len(body))}, body...)
+}
+
+func TestInitialCryptoStreamClientECHWithoutSNI(t *testing.T) {
+	skipIfDisableScramblingEnvSet(t)
+
+	str := newInitialCryptoStream(true)
+	clientHello := clientHelloWithOnlyECH()
+	_, err := str.Write(clientHello)
+	require.NoError(t, err)
+	require.True(t, str.HasData(), "a ClientHello with ECH but no SNI (e.g. dialing an IP) must still be sent")
+
+	segments := make(map[protocol.ByteCount][]byte)
+	for str.HasData() {
+		f := str.PopCryptoFrame(protocol.MaxByteCount)
+		require.NotNil(t, f)
+		segments[f.Offset] = f.Data
+	}
+	require.Equal(t, clientHello, reassembleCryptoData(t, segments))
+}
