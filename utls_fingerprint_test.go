@@ -1,0 +1,85 @@
+package quic
+
+import (
+	"context"
+	"crypto/tls"
+	"net"
+	"slices"
+	"testing"
+	"time"
+
+	"github.com/quic-go/quic-go/internal/testdata"
+
+	utls "github.com/refraction-networking/utls"
+	"github.com/stretchr/testify/require"
+)
+
+const extCompressCertificate = 27
+
+func observedClientHello(t *testing.T, conf *Config) *tls.ClientHelloInfo {
+	t.Helper()
+	hellos := make(chan *tls.ClientHelloInfo, 1)
+	serverTLS := testdata.GetTLSConfig()
+	serverTLS.NextProtos = []string{"utls-test"}
+	serverTLS.GetConfigForClient = func(h *tls.ClientHelloInfo) (*tls.Config, error) {
+		select {
+		case hellos <- h:
+		default:
+		}
+		return nil, nil
+	}
+	ln, err := ListenAddr("127.0.0.1:0", serverTLS, nil)
+	require.NoError(t, err)
+	accepted := make(chan struct{})
+	go func() {
+		defer close(accepted)
+		c, err := ln.Accept(context.Background())
+		if err == nil {
+			<-c.Context().Done()
+		}
+	}()
+
+	udp, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	require.NoError(t, err)
+	tr := &Transport{Conn: udp}
+	defer func() {
+		tr.Close()
+		udp.Close()
+		ln.Close()
+		<-accepted
+		require.Eventually(t, func() bool { return !areConnsRunning() && !areTransportsRunning() }, 5*time.Second, 10*time.Millisecond)
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	clientTLS := &tls.Config{RootCAs: testdata.GetRootCA(), ServerName: "localhost", NextProtos: []string{"utls-test"}}
+	conn, err := tr.Dial(ctx, ln.Addr(), clientTLS, conf)
+	require.NoError(t, err)
+	conn.CloseWithError(0, "")
+
+	select {
+	case h := <-hellos:
+		return h
+	case <-time.After(5 * time.Second):
+		t.Fatal("server never saw a ClientHello")
+		return nil
+	}
+}
+
+func TestTransportDialAppliesUTLSClientHello(t *testing.T) {
+	chrome := utls.HelloChrome_Auto
+	h := observedClientHello(t, &Config{ClientHelloID: &chrome})
+	require.True(t, slices.Contains(h.Extensions, extCompressCertificate),
+		"ClientHelloID was not applied: no Chrome compress_certificate extension in %v", h.Extensions)
+
+	plain := observedClientHello(t, nil)
+	require.False(t, slices.Contains(plain.Extensions, extCompressCertificate),
+		"without ClientHelloID the standard crypto/tls hello must be used")
+}
+
+func TestPopulateConfigKeepsForkFields(t *testing.T) {
+	chrome := utls.HelloChrome_Auto
+	c := populateConfig(&Config{ClientHelloID: &chrome, ActiveConnectionIDLimit: 8, DisableActiveMigration: true})
+	require.Equal(t, &chrome, c.ClientHelloID)
+	require.Equal(t, uint64(8), c.ActiveConnectionIDLimit)
+	require.True(t, c.DisableActiveMigration)
+}

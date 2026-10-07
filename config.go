@@ -125,5 +125,9 @@ func populateConfig(config *Config) *Config {
 		EnableStreamResetPartialDelivery: config.EnableStreamResetPartialDelivery,
 		Allow0RTT:                        config.Allow0RTT,
 		Tracer:                           config.Tracer,
+		ConnectionIDGenerator:            config.ConnectionIDGenerator,
+		ActiveConnectionIDLimit:          config.ActiveConnectionIDLimit,
+		DisableActiveMigration:           config.DisableActiveMigration,
+		ClientHelloID:                    config.ClientHelloID,
 	}
 }

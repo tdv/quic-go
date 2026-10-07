@@ -10,6 +10,7 @@ import (
 	"github.com/quic-go/quic-go/qlogwriter"
 	"github.com/quic-go/quic-go/quicvarint"
 
+	utls "github.com/refraction-networking/utls"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -128,6 +129,13 @@ func configWithNonZeroNonFunctionFields(t *testing.T) *Config {
 			f.Set(reflect.ValueOf(true))
 		case "EnableStreamResetPartialDelivery":
 			f.Set(reflect.ValueOf(true))
+		case "ActiveConnectionIDLimit":
+			f.Set(reflect.ValueOf(uint64(8)))
+		case "DisableActiveMigration":
+			f.Set(reflect.ValueOf(true))
+		case "ClientHelloID":
+			chrome := utls.HelloChrome_Auto
+			f.Set(reflect.ValueOf(&chrome))
 		default:
 			t.Fatalf("all fields must be accounted for, but saw unknown field %q", fn)
 		}

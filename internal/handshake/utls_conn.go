@@ -21,7 +21,10 @@ type quicTLSConn interface {
 var _ quicTLSConn = (*tls.QUICConn)(nil)
 
 type utlsConnWrapper struct {
-	conn *utls.UQUICConn
+	conn    *utls.UQUICConn
+	helloID utls.ClientHelloID
+	alpn    []string
+	params  []byte
 }
 
 func newUTLSConn(tlsConf *tls.Config, helloID utls.ClientHelloID) *utlsConnWrapper {
@@ -31,8 +34,8 @@ func newUTLSConn(tlsConf *tls.Config, helloID utls.ClientHelloID) *utlsConnWrapp
 		VerifyPeerCertificate: tlsConf.VerifyPeerCertificate,
 		RootCAs:               tlsConf.RootCAs,
 		NextProtos:            tlsConf.NextProtos,
-		MinVersion:            tlsConf.MinVersion,
-		MaxVersion:            tlsConf.MaxVersion,
+		MinVersion:            utls.VersionTLS13,
+		MaxVersion:            utls.VersionTLS13,
 		KeyLogWriter:          tlsConf.KeyLogWriter,
 	}
 	if tlsConf.VerifyConnection != nil {
@@ -54,16 +57,76 @@ func newUTLSConn(tlsConf *tls.Config, helloID utls.ClientHelloID) *utlsConnWrapp
 		}
 	}
 	return &utlsConnWrapper{
-		conn: utls.UQUICClient(&utls.QUICConfig{TLSConfig: uConf}, helloID),
+		conn:    utls.UQUICClient(&utls.QUICConfig{TLSConfig: uConf}, utls.HelloCustom),
+		helloID: helloID,
+		alpn:    tlsConf.NextProtos,
 	}
 }
 
 func (w *utlsConnWrapper) SetTransportParameters(p []byte) {
+	w.params = append([]byte(nil), p...)
 	w.conn.SetTransportParameters(p)
 }
 
 func (w *utlsConnWrapper) Start(ctx context.Context) error {
+	spec, err := quicClientHelloSpec(w.helloID, w.alpn, w.params)
+	if err != nil {
+		return err
+	}
+	if err := w.conn.ApplyPreset(&spec); err != nil {
+		return err
+	}
 	return w.conn.Start(ctx)
+}
+
+const extensionQUICTransportParameters = 57
+
+func isGREASE(v uint16) bool {
+	return v&0x0f0f == 0x0a0a
+}
+
+// quicClientHelloSpec adapts a browser's TCP TLS fingerprint to QUIC: TLS 1.3
+// only, the connection's ALPN (also used for ALPS), the QUIC transport
+// parameters extension, and without TLS-over-TCP-only extensions.
+func quicClientHelloSpec(id utls.ClientHelloID, alpn []string, params []byte) (utls.ClientHelloSpec, error) {
+	spec, err := utls.UTLSIdToSpec(id)
+	if err != nil {
+		return spec, err
+	}
+	spec.TLSVersMin, spec.TLSVersMax = utls.VersionTLS13, utls.VersionTLS13
+	suites := spec.CipherSuites[:0]
+	for _, cs := range spec.CipherSuites {
+		if isGREASE(cs) || (cs >= tls.TLS_AES_128_GCM_SHA256 && cs <= tls.TLS_CHACHA20_POLY1305_SHA256) {
+			suites = append(suites, cs)
+		}
+	}
+	spec.CipherSuites = suites
+	exts := make([]utls.TLSExtension, 0, len(spec.Extensions)+1)
+	for _, ext := range spec.Extensions {
+		switch e := ext.(type) {
+		case *utls.ExtendedMasterSecretExtension, *utls.RenegotiationInfoExtension, *utls.SupportedPointsExtension,
+			*utls.SessionTicketExtension, *utls.StatusRequestExtension, *utls.SCTExtension, *utls.UtlsPaddingExtension,
+			*utls.UtlsPreSharedKeyExtension, *utls.FakePreSharedKeyExtension:
+			continue
+		case *utls.ALPNExtension:
+			e.AlpnProtocols = alpn
+		case *utls.ApplicationSettingsExtension:
+			e.SupportedProtocols = alpn
+		case *utls.ApplicationSettingsExtensionNew:
+			e.SupportedProtocols = alpn
+		case *utls.SupportedVersionsExtension:
+			versions := []uint16{}
+			for _, v := range e.Versions {
+				if isGREASE(v) || v == utls.VersionTLS13 {
+					versions = append(versions, v)
+				}
+			}
+			e.Versions = versions
+		}
+		exts = append(exts, ext)
+	}
+	spec.Extensions = append(exts, &utls.GenericExtension{Id: extensionQUICTransportParameters, Data: params})
+	return spec, nil
 }
 
 func (w *utlsConnWrapper) HandleData(level tls.QUICEncryptionLevel, data []byte) error {
