@@ -1,6 +1,7 @@
 package handshake
 
 import (
+	"crypto/fips140"
 	"crypto/rand"
 	"crypto/tls"
 	"fmt"
@@ -76,6 +77,10 @@ func bothSides(ev qlogwriter.Event) []qlogwriter.Event {
 }
 
 func TestChaChaTestVector(t *testing.T) {
+	if fips140.Enabled() {
+		t.Skip("ChaCha20-Poly1305 is not allowed in FIPS 140-3 mode")
+	}
+
 	testCases := []struct {
 		name            string
 		version         protocol.Version
@@ -98,7 +103,7 @@ func TestChaChaTestVector(t *testing.T) {
 		t.Run(fmt.Sprintf("QUIC %s", tc.version), func(t *testing.T) {
 			secret := splitHexString(t, "9ac312a7f877468ebe69422748ad00a1 5443f18203a07d6060f688f30f21632b")
 			aead := newUpdatableAEAD(utils.NewRTTStats(), nil, nil, tc.version)
-			chacha := cipherSuites[2]
+			chacha := getCipherSuite(tls.TLS_CHACHA20_POLY1305_SHA256)
 			require.Equal(t, tls.TLS_CHACHA20_POLY1305_SHA256, chacha.ID)
 			aead.SetWriteKey(chacha, secret)
 			const pnOffset = 1
@@ -131,7 +136,7 @@ func TestUpdatableAEADHeaderProtection(t *testing.T) {
 				server.SetWriteKey(cs, trafficSecret2)
 
 				var lastFiveBitsDifferent int
-				for i := 0; i < 100; i++ {
+				for range 100 {
 					sample := make([]byte, 16)
 					rand.Read(sample)
 					header := []byte{0xb5, 1, 2, 3, 4, 5, 6, 7, 8, 0xde, 0xad, 0xbe, 0xef}
@@ -178,10 +183,10 @@ func TestUpdatableAEADEncryptDecryptMessage(t *testing.T) {
 				require.Equal(t, msg, opened)
 
 				_, err = client.Open(nil, encrypted, monotime.Now(), 0x1337, protocol.KeyPhaseZero, []byte("wrong ad"))
-				require.Equal(t, ErrDecryptionFailed, err)
+				require.ErrorIs(t, err, ErrDecryptionFailed)
 
 				_, err = client.Open(nil, encrypted, monotime.Now(), 0x42, protocol.KeyPhaseZero, ad)
-				require.Equal(t, ErrDecryptionFailed, err)
+				require.ErrorIs(t, err, ErrDecryptionFailed)
 			})
 		}
 	}
@@ -210,12 +215,11 @@ func TestUpdatableAEADPacketNumbers(t *testing.T) {
 func TestAEADLimitReached(t *testing.T) {
 	client, _, _ := setupEndpoints(t, utils.NewRTTStats())
 	client.invalidPacketLimit = 10
-	for i := 0; i < 9; i++ {
+	for i := range 9 {
 		_, err := client.Open(nil, []byte("foobar"), monotime.Now(), protocol.PacketNumber(i), protocol.KeyPhaseZero, []byte("ad"))
-		require.Equal(t, ErrDecryptionFailed, err)
+		require.ErrorIs(t, err, ErrDecryptionFailed)
 	}
 	_, err := client.Open(nil, []byte("foobar"), monotime.Now(), 10, protocol.KeyPhaseZero, []byte("ad"))
-	require.Error(t, err)
 	var transportErr *qerr.TransportError
 	require.ErrorAs(t, err, &transportErr)
 	require.Equal(t, qerr.AEADLimitReached, transportErr.ErrorCode)
@@ -233,7 +237,7 @@ func TestKeyUpdates(t *testing.T) {
 	require.NotEqual(t, encrypted0, encrypted1)
 
 	_, err := client.Open(nil, encrypted1, now, 0x1337, protocol.KeyPhaseZero, []byte(ad))
-	require.Equal(t, ErrDecryptionFailed, err)
+	require.ErrorIs(t, err, ErrDecryptionFailed)
 
 	client.rollKeys()
 	decrypted, err := client.Open(nil, encrypted1, now, 0x1337, protocol.KeyPhaseOne, []byte(ad))
@@ -331,7 +335,7 @@ func TestDropsKeys3PTOsAfterKeyUpdate(t *testing.T) {
 
 	// packet arrived too late, the key was already dropped
 	_, err = server.Open(nil, encrypted02, now.Add(3*pto).Add(time.Nanosecond), 0x43, protocol.KeyPhaseZero, []byte(ad))
-	require.Equal(t, ErrKeysDropped, err)
+	require.ErrorIs(t, err, ErrKeysDropped)
 	require.Equal(t,
 		bothSides(qlog.KeyDiscarded{KeyPhase: 0}),
 		eventRecorder.Events(),
@@ -345,7 +349,7 @@ func TestAllowsFirstKeyUpdateImmediately(t *testing.T) {
 
 	// if decryption failed, we don't expect a key phase update
 	_, err := server.Open(nil, encrypted[:len(encrypted)-1], monotime.Now(), 0x1337, protocol.KeyPhaseOne, []byte(ad))
-	require.Equal(t, ErrDecryptionFailed, err)
+	require.ErrorIs(t, err, ErrDecryptionFailed)
 
 	// the key phase is updated on first successful decryption
 	_, err = server.Open(nil, encrypted, monotime.Now(), 0x1337, protocol.KeyPhaseOne, []byte(ad))
@@ -368,10 +372,10 @@ func TestRejectFrequentKeyUpdates(t *testing.T) {
 	client.rollKeys()
 	encrypted1 := client.Seal(nil, []byte(msg), 0x42, []byte(ad))
 	_, err = server.Open(nil, encrypted1, monotime.Now(), 0x42, protocol.KeyPhaseZero, []byte(ad))
-	require.Equal(t, &qerr.TransportError{
-		ErrorCode:    qerr.KeyUpdateError,
-		ErrorMessage: "keys updated too quickly",
-	}, err)
+	var transportErr *qerr.TransportError
+	require.ErrorAs(t, err, &transportErr)
+	require.Equal(t, qerr.KeyUpdateError, transportErr.ErrorCode)
+	require.Equal(t, "keys updated too quickly", transportErr.ErrorMessage)
 }
 
 func setKeyUpdateIntervals(t *testing.T, firstKeyUpdateInterval, keyUpdateInterval uint64) {
@@ -466,7 +470,6 @@ func TestKeyUpdateEnforceACKKeyPhase(t *testing.T) {
 	// We haven't decrypted any packet in the new key phase yet.
 	// This means that the ACK must have been sent in the old key phase.
 	err := server.SetLargestAcked(nextPN)
-	require.Error(t, err)
 	var transportErr *qerr.TransportError
 	require.ErrorAs(t, err, &transportErr)
 	require.Equal(t, qerr.KeyUpdateError, transportErr.ErrorCode)
@@ -556,8 +559,8 @@ func TestKeyUpdateKeyPhaseSkipping(t *testing.T) {
 
 	// The server never received a packet at key phase 1.
 	// Make sure the key phase 0 is still there at a much later point.
-	data2 := client.Seal(nil, []byte(msg), 1, []byte(ad))
-	_, err = server.Open(nil, data2, now.Add(10*rttStats.PTO(true)), 1, protocol.KeyPhaseZero, []byte(ad))
+	data2 := client.Seal(nil, []byte(msg), 2, []byte(ad))
+	_, err = server.Open(nil, data2, now.Add(10*rttStats.PTO(true)), 2, protocol.KeyPhaseZero, []byte(ad))
 	require.NoError(t, err)
 	require.Empty(t, eventRecorder.Events())
 }

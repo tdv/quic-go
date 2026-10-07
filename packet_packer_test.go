@@ -187,7 +187,8 @@ func testPackLongHeaders(t *testing.T, includeACK bool) {
 		tp.sealingManager.EXPECT().Get0RTTSealer().Return(nil, handshake.ErrKeysNotYetAvailable)
 		tp.sealingManager.EXPECT().Get1RTTSealer().Return(nil, handshake.ErrKeysNotYetAvailable)
 	}
-	clientHello := getClientHello(t, "quic-go.net")
+	clientHello, err := getClientHello("quic-go.net")
+	require.NoError(t, err)
 	tp.initialStream.Write(clientHello)
 	tp.initialStream.Write(make([]byte, 900-len(clientHello))) // add some more data
 	tp.packer.retransmissionQueue.addHandshake(&wire.PingFrame{})
@@ -489,6 +490,28 @@ func testPackConnectionCloseCoalesced(t *testing.T, pers protocol.Perspective) {
 	}
 }
 
+// Regression test for https://github.com/quic-go/quic-go/issues/5857
+func TestPackConnectionCloseCoalescedClient1RTT(t *testing.T) {
+	const maxPacketSize protocol.ByteCount = protocol.MaxPacketBufferSize
+	mockCtrl := gomock.NewController(t)
+	tp := newTestPacketPacker(t, mockCtrl, protocol.PerspectiveClient)
+	tp.sealingManager.EXPECT().GetInitialSealer().Return(newMockShortHeaderSealer(mockCtrl), nil)
+	tp.sealingManager.EXPECT().GetHandshakeSealer().Return(newMockShortHeaderSealer(mockCtrl), nil)
+	tp.sealingManager.EXPECT().Get0RTTSealer().Return(nil, handshake.ErrKeysDropped)
+	tp.sealingManager.EXPECT().Get1RTTSealer().Return(newMockShortHeaderSealer(mockCtrl), nil)
+	for i, encLevel := range []protocol.EncryptionLevel{protocol.EncryptionInitial, protocol.EncryptionHandshake, protocol.Encryption1RTT} {
+		pn := protocol.PacketNumber(i + 1)
+		tp.pnManager.EXPECT().PeekPacketNumber(encLevel).Return(pn, protocol.PacketNumberLen2)
+		tp.pnManager.EXPECT().PopPacketNumber(encLevel).Return(pn)
+	}
+	p, err := tp.packer.PackApplicationClose(&qerr.ApplicationError{ErrorMessage: "connection closed"}, maxPacketSize, protocol.Version1)
+	require.NoError(t, err)
+	defer p.buffer.Release()
+	require.Len(t, p.longHdrPackets, 2)
+	require.NotNil(t, p.shortHdrPacket)
+	require.Equal(t, maxPacketSize, p.buffer.Len())
+}
+
 func TestPackConnectionCloseCryptoError(t *testing.T) {
 	mockCtrl := gomock.NewController(t)
 	tp := newTestPacketPacker(t, mockCtrl, protocol.PerspectiveServer)
@@ -725,7 +748,7 @@ func TestPackRetransmissions(t *testing.T) {
 
 func packMaxNumNonAckElicitingAcks(t *testing.T, tp *testPacketPacker, mockCtrl *gomock.Controller, maxPacketSize protocol.ByteCount) {
 	t.Helper()
-	for i := 0; i < protocol.MaxNonAckElicitingAcks; i++ {
+	for range protocol.MaxNonAckElicitingAcks {
 		tp.pnManager.EXPECT().PeekPacketNumber(protocol.Encryption1RTT).Return(protocol.PacketNumber(0x42), protocol.PacketNumberLen2)
 		tp.pnManager.EXPECT().PopPacketNumber(protocol.Encryption1RTT).Return(protocol.PacketNumber(0x42))
 		tp.sealingManager.EXPECT().Get1RTTSealer().Return(newMockShortHeaderSealer(mockCtrl), nil)
@@ -857,7 +880,7 @@ func TestPackShortHeaderPadToAtLeast4Bytes(t *testing.T) {
 	require.NoError(t, err)
 	payload := data[l:]
 	require.Equal(t, protocol.PacketNumberLen1, pnLen)
-	require.Equal(t, 4-1 /* packet number length */, len(payload))
+	require.Len(t, payload, 4-1 /* packet number length */)
 	// the first byte of the payload should be a PADDING frame...
 	require.Equal(t, byte(0), payload[0])
 
@@ -902,7 +925,9 @@ func testPackProbePacket(t *testing.T, encLevel protocol.EncryptionLevel, perspe
 	switch encLevel {
 	case protocol.EncryptionInitial:
 		tp.sealingManager.EXPECT().GetInitialSealer().Return(newMockShortHeaderSealer(mockCtrl), nil)
-		cryptoData = getClientHello(t, "")
+		var err error
+		cryptoData, err = getClientHello("")
+		require.NoError(t, err)
 		tp.packer.initialStream.Write(cryptoData)
 	case protocol.EncryptionHandshake:
 		tp.sealingManager.EXPECT().GetHandshakeSealer().Return(newMockShortHeaderSealer(mockCtrl), nil)

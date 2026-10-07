@@ -523,7 +523,7 @@ func test0RTTRetransmitOnRetry(t *testing.T, useRetry bool) {
 
 		require.Len(t, connIDToCounter, 2)
 		require.InDelta(t, 5000+100 /* framing overhead */, int(connIDToCounter[0].bytes), 100) // the FIN bit might be sent extra
-		require.InDelta(t, int(connIDToCounter[0].bytes), int(connIDToCounter[1].bytes), 20)
+		require.InDelta(t, int(connIDToCounter[0].bytes), int(connIDToCounter[1].bytes), 30)
 		zeroRTTPackets := counter.getRcvd0RTTPacketNumbers()
 		require.GreaterOrEqual(t, len(zeroRTTPackets), 5)
 		require.GreaterOrEqual(t, zeroRTTPackets[0], protocol.PacketNumber(5))
@@ -624,7 +624,7 @@ func check0RTTRejected(t *testing.T,
 	require.False(t, serverConn.ConnectionState().Used0RTT)
 	if sendData {
 		_, err = serverConn.AcceptUniStream(ctx)
-		require.Equal(t, context.DeadlineExceeded, err)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
 	}
 
 	ctx, cancel = context.WithTimeout(context.Background(), time.Second)

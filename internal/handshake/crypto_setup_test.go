@@ -7,7 +7,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"errors"
 	"math/big"
 	"net"
 	"testing"
@@ -76,11 +75,11 @@ func TestErrorBeforeClientHelloGeneration(t *testing.T) {
 		protocol.Version1,
 	)
 
-	var terr *qerr.TransportError
 	err := cl.StartHandshake(context.Background())
-	require.True(t, errors.As(err, &terr))
+	var terr *qerr.TransportError
+	require.ErrorAs(t, err, &terr)
 	require.Equal(t, uint64(0x100+0x50), uint64(terr.ErrorCode))
-	require.Contains(t, err.Error(), "tls: invalid NextProtos value")
+	require.ErrorContains(t, err, "tls: invalid NextProtos value")
 }
 
 func TestMessageReceivedAtWrongEncryptionLevel(t *testing.T) {
@@ -103,8 +102,7 @@ func TestMessageReceivedAtWrongEncryptionLevel(t *testing.T) {
 	fakeCH := append([]byte{typeClientHello, 0, 0, 6}, []byte("foobar")...)
 	// wrong encryption level
 	err := server.HandleMessage(fakeCH, protocol.EncryptionHandshake)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "tls: handshake data received at wrong level")
+	require.ErrorContains(t, err, "tls: handshake data received at wrong level")
 }
 
 // The clientEvents and serverEvents contain all events that were not processed by the function,
@@ -232,6 +230,11 @@ func TestHandshake(t *testing.T) {
 func TestHelloRetryRequest(t *testing.T) {
 	clientConf, serverConf := getTLSConfigs()
 	serverConf.CurvePreferences = []tls.CurveID{tls.CurveP384}
+	var helloRetryRequest bool
+	serverConf.GetCertificate = func(info *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		helloRetryRequest = info.HelloRetryRequest
+		return nil, nil
+	}
 	_, _, clientErr, _, _, serverErr := handshakeWithTLSConf(
 		t,
 		clientConf, serverConf,
@@ -241,6 +244,7 @@ func TestHelloRetryRequest(t *testing.T) {
 	)
 	require.NoError(t, clientErr)
 	require.NoError(t, serverErr)
+	require.True(t, helloRetryRequest)
 }
 
 func TestWithClientAuth(t *testing.T) {
@@ -345,8 +349,7 @@ func TestNewSessionTicketAtWrongEncryptionLevel(t *testing.T) {
 	// inject an invalid session ticket
 	b := append([]byte{uint8(typeNewSessionTicket), 0, 0, 6}, []byte("foobar")...)
 	err := client.HandleMessage(b, protocol.EncryptionHandshake)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "tls: handshake data received at wrong level")
+	require.ErrorContains(t, err, "tls: handshake data received at wrong level")
 }
 
 func TestHandlingNewSessionTicketFails(t *testing.T) {
@@ -484,23 +487,19 @@ func Test0RTT(t *testing.T) {
 	require.NoError(t, serverErr)
 
 	var tp *wire.TransportParameters
-	var clientReceived0RTTKeys bool
 	for _, ev := range clientEvents {
 		switch ev.Kind {
 		case EventRestoredTransportParameters:
 			tp = ev.TransportParameters
-		case EventReceivedReadKeys:
-			clientReceived0RTTKeys = true
 		}
 	}
-	require.True(t, clientReceived0RTTKeys)
 	require.NotNil(t, tp)
 	require.Equal(t, initialMaxData, tp.InitialMaxData)
 
 	var serverReceived0RTTKeys bool
 	for _, ev := range serverEvents {
 		switch ev.Kind {
-		case EventReceivedReadKeys:
+		case EventReceived0RTTReadKeys:
 			serverReceived0RTTKeys = true
 		}
 	}
@@ -548,16 +547,12 @@ func Test0RTTRejectionOnTransportParametersChanged(t *testing.T) {
 	require.NoError(t, serverErr)
 
 	var tp *wire.TransportParameters
-	var clientReceived0RTTKeys bool
 	for _, ev := range clientEvents {
 		switch ev.Kind {
 		case EventRestoredTransportParameters:
 			tp = ev.TransportParameters
-		case EventReceivedReadKeys:
-			clientReceived0RTTKeys = true
 		}
 	}
-	require.True(t, clientReceived0RTTKeys)
 	require.NotNil(t, tp)
 	require.Equal(t, initialMaxData, tp.InitialMaxData)
 

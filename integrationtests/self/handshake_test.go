@@ -2,6 +2,7 @@ package self_test
 
 import (
 	"context"
+	"crypto/fips140"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -106,12 +107,12 @@ func TestHandshakeServerMismatch(t *testing.T) {
 	defer cancel()
 	_, err = quic.Dial(ctx, newUDPConnLocalhost(t), server.Addr(), conf, getQuicConfig(nil))
 	require.Error(t, err)
-	var transportErr *quic.TransportError
-	require.True(t, errors.As(err, &transportErr))
+	transportErr, ok := errors.AsType[*quic.TransportError](err)
+	require.True(t, ok)
 	require.True(t, transportErr.ErrorCode.IsCryptoError())
-	require.Contains(t, transportErr.Error(), "x509: certificate is valid for localhost, not foo.bar")
-	var certErr *tls.CertificateVerificationError
-	require.True(t, errors.As(transportErr, &certErr))
+	require.ErrorContains(t, transportErr, "x509: certificate is valid for localhost, not foo.bar")
+	_, ok = errors.AsType[*tls.CertificateVerificationError](transportErr)
+	require.True(t, ok)
 }
 
 func TestHandshakeCipherSuites(t *testing.T) {
@@ -121,6 +122,10 @@ func TestHandshakeCipherSuites(t *testing.T) {
 		tls.TLS_CHACHA20_POLY1305_SHA256,
 	} {
 		t.Run(tls.CipherSuiteName(suiteID), func(t *testing.T) {
+			if fips140.Enabled() && suiteID == tls.TLS_CHACHA20_POLY1305_SHA256 {
+				t.Skip("ChaCha20-Poly1305 is not allowed in FIPS 140-3 mode")
+			}
+
 			reset := qtls.SetCipherSuite(suiteID)
 			defer reset()
 
@@ -194,7 +199,7 @@ func TestTLSConfigGetConfigForClientAddresses(t *testing.T) {
 				defer close(done)
 				local2 = info.Conn.LocalAddr()
 				remote2 = info.Conn.RemoteAddr()
-				return &(conf.Certificates[0]), nil
+				return &conf.Certificates[0], nil
 			}
 			return conf, nil
 		},
@@ -246,7 +251,6 @@ func TestHandshakeFailsWithoutClientCert(t *testing.T) {
 		err = <-errChan
 	}
 
-	require.Error(t, err)
 	var transportErr *quic.TransportError
 	require.ErrorAs(t, err, &transportErr)
 	require.True(t, transportErr.ErrorCode.IsCryptoError())
@@ -281,7 +285,7 @@ func TestClosedConnectionsInAcceptQueue(t *testing.T) {
 
 	// accept all connections, and find the closed one
 	var closedConn *quic.Conn
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		conn, err := server.Accept(ctx)
 		require.NoError(t, err)
 		if conn.Context().Err() != nil {
@@ -308,7 +312,7 @@ func TestServerAcceptQueueOverflow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	// fill up the accept queue
-	for i := 0; i < protocol.MaxAcceptQueueSize; i++ {
+	for range protocol.MaxAcceptQueueSize {
 		conn, err := dialer.Dial(ctx, server.Addr(), getTLSClientConfig(), getQuicConfig(nil))
 		require.NoError(t, err)
 		defer conn.CloseWithError(0, "")
@@ -499,11 +503,10 @@ func TestALPN(t *testing.T) {
 	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	_, err = quic.Dial(ctx, newUDPConnLocalhost(t), ln.Addr(), tlsConf, nil)
-	require.Error(t, err)
 	var transportErr *quic.TransportError
 	require.ErrorAs(t, err, &transportErr)
 	require.True(t, transportErr.ErrorCode.IsCryptoError())
-	require.Contains(t, transportErr.Error(), "no application protocol")
+	require.ErrorContains(t, transportErr, "no application protocol")
 }
 
 func TestTokensFromNewTokenFrames(t *testing.T) {
@@ -635,7 +638,6 @@ func TestInvalidToken(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	_, err = quic.Dial(ctx, newUDPConnLocalhost(t), proxy.LocalAddr(), getTLSClientConfig(), nil)
-	require.Error(t, err)
 	var transportErr *quic.TransportError
 	require.ErrorAs(t, err, &transportErr)
 	require.Equal(t, quic.InvalidToken, transportErr.ErrorCode)
@@ -736,7 +738,7 @@ func TestNoPacketsSentWhenClientHelloFails(t *testing.T) {
 	var transportErr *quic.TransportError
 	require.ErrorAs(t, err, &transportErr)
 	require.True(t, transportErr.ErrorCode.IsCryptoError())
-	require.Contains(t, err.Error(), "tls: invalid NextProtos value")
+	require.ErrorContains(t, err, "tls: invalid NextProtos value")
 
 	// verify no packets were sent
 	select {
