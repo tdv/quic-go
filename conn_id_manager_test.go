@@ -12,7 +12,7 @@ import (
 )
 
 func TestConnIDManagerInitialConnID(t *testing.T) {
-	m := newConnIDManager(protocol.ParseConnectionID([]byte{1, 2, 3, 4}), nil, nil, nil)
+	m := newConnIDManager(protocol.MaxActiveConnectionIDs, protocol.ParseConnectionID([]byte{1, 2, 3, 4}), nil, nil, nil)
 	require.Equal(t, protocol.ParseConnectionID([]byte{1, 2, 3, 4}), m.Get())
 	require.Equal(t, protocol.ParseConnectionID([]byte{1, 2, 3, 4}), m.Get())
 	m.ChangeInitialConnID(protocol.ParseConnectionID([]byte{5, 6, 7, 8}))
@@ -20,7 +20,7 @@ func TestConnIDManagerInitialConnID(t *testing.T) {
 }
 
 func TestConnIDManagerAddConnIDs(t *testing.T) {
-	m := newConnIDManager(
+	m := newConnIDManager(protocol.MaxActiveConnectionIDs,
 		protocol.ParseConnectionID([]byte{1, 2, 3, 4}),
 		func(protocol.StatelessResetToken) {},
 		func(protocol.StatelessResetToken) {},
@@ -69,7 +69,7 @@ func TestConnIDManagerAddConnIDs(t *testing.T) {
 }
 
 func TestConnIDManagerLimit(t *testing.T) {
-	m := newConnIDManager(
+	m := newConnIDManager(protocol.MaxActiveConnectionIDs,
 		protocol.ParseConnectionID([]byte{1, 2, 3, 4}),
 		func(protocol.StatelessResetToken) {},
 		func(protocol.StatelessResetToken) {},
@@ -94,7 +94,7 @@ func TestConnIDManagerLimit(t *testing.T) {
 
 func TestConnIDManagerRetiringConnectionIDs(t *testing.T) {
 	var frameQueue []wire.Frame
-	m := newConnIDManager(
+	m := newConnIDManager(protocol.MaxActiveConnectionIDs,
 		protocol.ParseConnectionID([]byte{1, 2, 3, 4}),
 		func(protocol.StatelessResetToken) {},
 		func(protocol.StatelessResetToken) {},
@@ -134,7 +134,7 @@ func TestConnIDManagerRetiringConnectionIDs(t *testing.T) {
 func TestConnIDManagerHandshakeCompletion(t *testing.T) {
 	var frameQueue []wire.Frame
 	var addedTokens, removedTokens []protocol.StatelessResetToken
-	m := newConnIDManager(
+	m := newConnIDManager(protocol.MaxActiveConnectionIDs,
 		protocol.ParseConnectionID([]byte{1, 2, 3, 4}),
 		func(token protocol.StatelessResetToken) { addedTokens = append(addedTokens, token) },
 		func(token protocol.StatelessResetToken) { removedTokens = append(removedTokens, token) },
@@ -166,7 +166,7 @@ func TestConnIDManagerConnIDRotation(t *testing.T) {
 
 	var frameQueue []wire.Frame
 	var addedTokens, removedTokens []protocol.StatelessResetToken
-	m := newConnIDManager(
+	m := newConnIDManager(protocol.MaxActiveConnectionIDs,
 		protocol.ParseConnectionID([]byte{1, 2, 3, 4}),
 		func(token protocol.StatelessResetToken) { addedTokens = append(addedTokens, token) },
 		func(token protocol.StatelessResetToken) { removedTokens = append(removedTokens, token) },
@@ -236,7 +236,7 @@ func TestConnIDManagerConnIDRotation(t *testing.T) {
 func TestConnIDManagerPathMigration(t *testing.T) {
 	var frameQueue []wire.Frame
 	var addedTokens, removedTokens []protocol.StatelessResetToken
-	m := newConnIDManager(
+	m := newConnIDManager(protocol.MaxActiveConnectionIDs,
 		protocol.ParseConnectionID([]byte{1, 2, 3, 4}),
 		func(token protocol.StatelessResetToken) { addedTokens = append(addedTokens, token) },
 		func(token protocol.StatelessResetToken) { removedTokens = append(removedTokens, token) },
@@ -340,7 +340,7 @@ func TestConnIDManagerPathMigration(t *testing.T) {
 }
 
 func TestConnIDManagerZeroLengthConnectionID(t *testing.T) {
-	m := newConnIDManager(
+	m := newConnIDManager(protocol.MaxActiveConnectionIDs,
 		protocol.ConnectionID{},
 		func(protocol.StatelessResetToken) {},
 		func(protocol.StatelessResetToken) {},
@@ -372,7 +372,7 @@ func TestConnIDManagerZeroLengthConnectionID(t *testing.T) {
 
 func TestConnIDManagerClose(t *testing.T) {
 	var addedTokens, removedTokens []protocol.StatelessResetToken
-	m := newConnIDManager(
+	m := newConnIDManager(protocol.MaxActiveConnectionIDs,
 		protocol.ParseConnectionID([]byte{1, 2, 3, 4}),
 		func(token protocol.StatelessResetToken) { addedTokens = append(addedTokens, token) },
 		func(token protocol.StatelessResetToken) { removedTokens = append(removedTokens, token) },
@@ -397,7 +397,7 @@ func BenchmarkConnIDManagerInOrder(b *testing.B) {
 }
 
 func benchmarkConnIDManager(b *testing.B, reordered bool) {
-	m := newConnIDManager(
+	m := newConnIDManager(protocol.MaxActiveConnectionIDs,
 		protocol.ParseConnectionID([]byte{1, 2, 3, 4}),
 		func(protocol.StatelessResetToken) {},
 		func(protocol.StatelessResetToken) {},

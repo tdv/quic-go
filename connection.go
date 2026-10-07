@@ -289,6 +289,7 @@ var newConnection = func(
 		s.logID = destConnID.String()
 	}
 	s.connIDManager = newConnIDManager(
+		protocol.MaxActiveConnectionIDs,
 		destConnID,
 		func(token protocol.StatelessResetToken) { runner.AddResetToken(token, s) },
 		runner.RemoveResetToken,
@@ -425,6 +426,7 @@ var newClientConnection = func(
 		s.qlogger.RecordEvent(startedConnectionEvent(srcAddr, destAddr))
 	}
 	s.connIDManager = newConnIDManager(
+		int(clientActiveConnIDLimit(conf)),
 		destConnID,
 		func(token protocol.StatelessResetToken) { runner.AddResetToken(token, s) },
 		runner.RemoveResetToken,

@@ -42,9 +42,11 @@ type connIDManager struct {
 	queueControlFrame         func(wire.Frame)
 
 	closed bool
+	limit  int
 }
 
 func newConnIDManager(
+	limit int,
 	initialDestConnID protocol.ConnectionID,
 	addStatelessResetToken func(protocol.StatelessResetToken),
 	removeStatelessResetToken func(protocol.StatelessResetToken),
@@ -55,7 +57,8 @@ func newConnIDManager(
 		addStatelessResetToken:    addStatelessResetToken,
 		removeStatelessResetToken: removeStatelessResetToken,
 		queueControlFrame:         queueControlFrame,
-		queue:                     make([]newConnID, 0, protocol.MaxActiveConnectionIDs),
+		queue:                     make([]newConnID, 0, limit),
+		limit:                     limit,
 	}
 }
 
@@ -70,7 +73,7 @@ func (h *connIDManager) Add(f *wire.NewConnectionIDFrame) error {
 	if err := h.add(f); err != nil {
 		return err
 	}
-	if len(h.queue) >= protocol.MaxActiveConnectionIDs {
+	if len(h.queue) >= h.limit {
 		return &qerr.TransportError{ErrorCode: qerr.ConnectionIDLimitError}
 	}
 	return nil
@@ -238,7 +241,7 @@ func (h *connIDManager) shouldUpdateConnID() bool {
 	// For later changes, only change if
 	// 1. The queue of connection IDs is filled more than 50%.
 	// 2. We sent at least PacketsPerConnectionID packets
-	return 2*len(h.queue) >= protocol.MaxActiveConnectionIDs &&
+	return 2*len(h.queue) >= h.limit &&
 		h.packetsSinceLastChange >= h.packetsPerConnectionID
 }
 

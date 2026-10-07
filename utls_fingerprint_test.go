@@ -3,6 +3,7 @@ package quic
 import (
 	"context"
 	"crypto/tls"
+	"io"
 	"net"
 	"slices"
 	"testing"
@@ -89,4 +90,53 @@ func TestPopulateConfigKeepsForkFields(t *testing.T) {
 	require.Equal(t, &chrome, c.ClientHelloID)
 	require.Equal(t, uint64(8), c.ActiveConnectionIDLimit)
 	require.True(t, c.DisableActiveMigration)
+}
+
+func TestClientAcceptsConnectionIDsUpToAdvertisedLimit(t *testing.T) {
+	serverTLS := testdata.GetTLSConfig()
+	serverTLS.NextProtos = []string{"cid-test"}
+	ln, err := ListenAddr("127.0.0.1:0", serverTLS, nil)
+	require.NoError(t, err)
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		c, err := ln.Accept(context.Background())
+		if err != nil {
+			return
+		}
+		str, err := c.AcceptStream(context.Background())
+		if err == nil {
+			buf := make([]byte, 4)
+			if _, err := str.Read(buf); err == nil {
+				str.Write(buf)
+			}
+		}
+		<-c.Context().Done()
+	}()
+
+	udp, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	require.NoError(t, err)
+	tr := &Transport{Conn: udp}
+	defer func() {
+		tr.Close()
+		udp.Close()
+		ln.Close()
+		<-served
+		require.Eventually(t, func() bool { return !areConnsRunning() && !areTransportsRunning() }, 5*time.Second, 10*time.Millisecond)
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	clientTLS := &tls.Config{RootCAs: testdata.GetRootCA(), ServerName: "localhost", NextProtos: []string{"cid-test"}}
+	conn, err := tr.Dial(ctx, ln.Addr(), clientTLS, &Config{ActiveConnectionIDLimit: 8})
+	require.NoError(t, err)
+	str, err := conn.OpenStreamSync(ctx)
+	require.NoError(t, err)
+	_, err = str.Write([]byte("ping"))
+	require.NoError(t, err)
+	buf := make([]byte, 4)
+	_, err = io.ReadFull(str, buf)
+	require.NoError(t, err)
+	time.Sleep(200 * time.Millisecond)
+	require.NoError(t, conn.Context().Err(), "connection closed after the server issued connection IDs within our advertised limit")
+	conn.CloseWithError(0, "")
 }
